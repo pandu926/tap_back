@@ -1,0 +1,47 @@
+[package]
+name = "tap-game-backend"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+tokio = { version = "1.0", features = ["full"] }
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+deadpool-redis = "0.22.0"
+
+# Database
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "postgres", "chrono", "uuid"] }
+
+# Redis
+redis = { version = "0.32.4", features = ["tokio-comp", "connection-manager"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Crypto
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Environment
+dotenvy = "0.15"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# URL parsing
+url = "2.4"
+
+# CSV for COPY operations
+csv = "1.3"
