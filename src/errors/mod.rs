@@ -5,7 +5,7 @@ use axum::{
 };
 use serde_json::json;
 use thiserror::Error;
-
+use deadpool;
 #[derive(Error, Debug)]
 pub enum AppError {
     #[error("Database error: {0}")]
@@ -28,19 +28,36 @@ pub enum AppError {
     
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
+
+    #[error("Redis pool error: {0}")]
+    RedisPool(#[from] deadpool::managed::PoolError<redis::RedisError>),
+
+    #[error("Redis pool creation error: {0}")]
+    RedisCreatePool(#[from] deadpool_redis::CreatePoolError),
+
+
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_message) = match &self {
-            AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
-            AppError::Authentication(_) => (StatusCode::FORBIDDEN, self.to_string()),
-            AppError::AntiCheat(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
-            AppError::Database(_) | AppError::Redis(_) | AppError::Internal(_) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".to_string())
-            }
-            AppError::Serialization(_) => (StatusCode::BAD_REQUEST, "Invalid JSON format".to_string()),
-        };
+    let (status, error_message) = match &self {
+        AppError::Validation(_) => (StatusCode::BAD_REQUEST, self.to_string()),
+        AppError::Authentication(_) => (StatusCode::FORBIDDEN, self.to_string()),
+        AppError::AntiCheat(_) => (StatusCode::TOO_MANY_REQUESTS, self.to_string()),
+        AppError::Database(_) 
+        | AppError::Redis(_) 
+        | AppError::RedisPool(_)
+        | AppError::RedisCreatePool(_)
+        | AppError::Internal(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error".to_string()
+        ),
+        AppError::Serialization(_) => (
+            StatusCode::BAD_REQUEST,
+            "Invalid JSON format".to_string()
+        ),
+    };  
+
 
         let body = Json(json!({
             "error": error_message,
@@ -49,5 +66,6 @@ impl IntoResponse for AppError {
         (status, body).into_response()
     }
 }
+
 
 pub type Result<T> = std::result::Result<T, AppError>;

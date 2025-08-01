@@ -21,16 +21,16 @@ pub async fn handle_tap_batch(
     let user_id = user.id;
     let tap_count = payload.taps.len() as i64;
 
-    // Anti-cheat validation
     validate_tap_batch(&payload, user_id)?;
 
-    // Log raw events (optional)
     if let Err(e) = log_tap_events(&state, user_id, &payload).await {
         warn!("Failed to log tap events for user {}: {}", user_id, e);
     }
 
-    // Process batch in Redis
-    state.redis_service.process_tap_batch(user_id, tap_count).await?;
+    // 🔽 FIX: define batch here
+    let batch = vec![(user_id, tap_count)];
+
+    state.redis_service.process_tap_batch_optimized(batch).await?;
 
     info!("Processed {} taps for user {}", tap_count, user_id);
 

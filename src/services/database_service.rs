@@ -1,4 +1,4 @@
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Row, Acquire};
 use sqlx::postgres::PgPoolOptions;
 use std::io::Write;
 use tracing::info;
@@ -14,32 +14,47 @@ pub struct DatabaseService {
 }
 
 impl DatabaseService {
-pub async fn new() -> Result<Self> {
-    let database_url = std::env::var("DATABASE_URL")
-        .expect("DATABASE_URL must be set");
+    pub async fn new() -> Result<Self> {
+        let database_url = std::env::var("DATABASE_URL")
+            .expect("DATABASE_URL must be set");
 
-    let pool = PgPoolOptions::new()
-        .max_connections(100)              // Naikkan sesuai beban
-        .acquire_timeout(std::time::Duration::from_secs(5))
-        .connect(&database_url)
-        .await?;
+        let pool = PgPoolOptions::new()
+            .max_connections(30)                    // Reduced for PgBouncer
+            .min_connections(5)
+            .acquire_timeout(std::time::Duration::from_secs(3))
+            .idle_timeout(std::time::Duration::from_secs(300))
+            .max_lifetime(std::time::Duration::from_secs(900))
+            .test_before_acquire(true)              // Test connections
+            .connect(&database_url)
+            .await?;
 
-    info!("Database connection pool established");
-    Ok(Self { pool })
-}
+        // Test connection immediately
+        sqlx::query("SELECT 1")
+            .fetch_one(&pool)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("Database connection test failed: {}", e)))?;
+
+        info!("Database connection pool established via PgBouncer with {} max connections", 30);
+        Ok(Self { pool })
+    }
+
     pub async fn bulk_upsert_scores(&self, updates: &[UserScoreUpdate]) -> Result<()> {
         if updates.is_empty() {
             return Ok(());
         }
+
         for u in updates.iter().take(10) {
             info!("User {}: +{} score", u.user_id, u.score_increment);
         }
         info!("...total {} users flushed", updates.len());
+
         // Separate user_ids and score_increments for UNNEST
         let user_ids: Vec<i64> = updates.iter().map(|u| u.user_id).collect();
         let score_increments: Vec<i64> = updates.iter().map(|u| u.score_increment).collect();
 
-        // Use UNNEST with ON CONFLICT for high-performance bulk upsert
+        // Use explicit transaction for PgBouncer compatibility
+        let mut tx = self.pool.begin().await?;
+
         sqlx::query!(
             r#"
             INSERT INTO players (user_id, score, last_seen)
@@ -57,71 +72,71 @@ pub async fn new() -> Result<Self> {
             &user_ids,
             &score_increments
         )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn log_tap_event(&self, log: &TapEventLog) -> Result<()> {
+        sqlx::query!(
+            r#"
+            INSERT INTO tap_events (event_time, user_id, tap_count)
+            VALUES ($1, $2, $3)
+            "#,
+            log.event_time,
+            log.user_id,
+            log.tap_count
+        )
         .execute(&self.pool)
         .await?;
 
         Ok(())
     }
 
-pub async fn log_tap_event(&self, log: &TapEventLog) -> Result<()> {
-    sqlx::query!(
-        r#"
-        INSERT INTO tap_events (event_time, user_id, tap_count)
-        VALUES ($1, $2, $3)
-        "#,
-        log.event_time,
-        log.user_id,
-        log.tap_count
-    )
-    .execute(&self.pool)
-    .await?;
-
-    Ok(())
-}
-
-pub async fn bulk_copy_logs(&self, logs: &[TapEventLog]) -> Result<()> {
-    if logs.is_empty() {
-        return Ok(());
-    }
-
-    let mut conn = self.pool.acquire().await?;
-
-    // Start COPY operation
-    let mut copy_in = conn.copy_in_raw(
-        "COPY tap_events (event_time, user_id, tap_count) FROM STDIN WITH (FORMAT CSV)"
-    ).await?;
-
-    // Serialize data to CSV format in memory
-    let csv_data = {
-        let mut data = Vec::new();
-        let mut writer = csv::WriterBuilder::new()
-            .has_headers(false)
-            .from_writer(&mut data);
-
-        for log in logs {
-            writer.serialize((
-                log.event_time.format("%Y-%m-%d %H:%M:%S%.6f").to_string(),
-                log.user_id,
-                log.tap_count,
-            )).map_err(|e| AppError::Internal(anyhow::anyhow!("CSV serialize error: {}", e)))?;
+    // IMPORTANT: COPY operations don't work well with PgBouncer in transaction mode
+    // Use batch INSERT instead
+    pub async fn bulk_copy_logs(&self, logs: &[TapEventLog]) -> Result<()> {
+        if logs.is_empty() {
+            return Ok(());
         }
 
-        writer.flush()
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("CSV flush error: {}", e)))?;
+        // For PgBouncer compatibility, use batch INSERT instead of COPY
+        const BATCH_SIZE: usize = 1000;
         
-        // Drop the writer here, then return the data
-        drop(writer);
-        data
-    }; // csv_data now owns the Vec<u8> and writer is dropped
+        for chunk in logs.chunks(BATCH_SIZE) {
+            let mut tx = self.pool.begin().await?;
+            
+            // Collect values for batch insert
+            let mut event_times = Vec::new();
+            let mut user_ids = Vec::new();
+            let mut tap_counts = Vec::new();
+            
+            for log in chunk {
+                event_times.push(log.event_time);
+                user_ids.push(log.user_id);
+                tap_counts.push(log.tap_count);
+            }
+            
+            sqlx::query!(
+                r#"
+                INSERT INTO tap_events (event_time, user_id, tap_count)
+                SELECT * FROM UNNEST($1::timestamptz[], $2::bigint[], $3::integer[])
+                "#,
+                &event_times,
+                &user_ids,
+                &tap_counts
+            )
+            .execute(&mut *tx)
+            .await?;
+            
+            tx.commit().await?;
+        }
 
-    // Stream CSV data to database
-    copy_in.send(csv_data).await?;
-
-    // Finish COPY operation
-    copy_in.finish().await?;
-
-    Ok(())
-}
+        info!("Bulk inserted {} tap events in batches", logs.len());
+        Ok(())
+    }
 
     pub async fn get_user_by_id(&self, user_id: i64) -> Result<Option<PlayerRecord>> {
         let record = sqlx::query_as!(
@@ -158,13 +173,15 @@ pub async fn bulk_copy_logs(&self, logs: &[TapEventLog]) -> Result<()> {
     }
 
     pub async fn get_user_rank(&self, user_id: i64) -> Result<Option<i64>> {
+        // Use a more efficient approach for ranking with PgBouncer
         let result = sqlx::query!(
             r#"
-            SELECT rank FROM (
-                SELECT user_id, RANK() OVER (ORDER BY score DESC) as rank
-                FROM players
-            ) ranked
-            WHERE user_id = $1
+            WITH user_score AS (
+                SELECT score FROM players WHERE user_id = $1
+            )
+            SELECT COUNT(*) + 1 as rank
+            FROM players p, user_score us
+            WHERE p.score > us.score
             "#,
             user_id
         )
@@ -232,16 +249,37 @@ pub async fn bulk_copy_logs(&self, logs: &[TapEventLog]) -> Result<()> {
     }
 
     pub async fn cleanup_old_events(&self, days_to_keep: i32) -> Result<u64> {
-    let query = format!(
-        "DELETE FROM tap_events WHERE event_time < NOW() - INTERVAL '{} days'",
-        days_to_keep
-    );
-    
-    let result = sqlx::query(&query)
+        // Use parameterized query instead of format! for security
+        let result = sqlx::query!(
+            r#"
+            DELETE FROM tap_events 
+            WHERE event_time < NOW() - INTERVAL '1 day' * $1
+            "#,
+            days_to_keep
+        )
         .execute(&self.pool)
         .await?;
-    
-    Ok(result.rows_affected())
+
+        Ok(result.rows_affected())
+    }
+
+    // Add health check method
+    pub async fn health_check(&self) -> Result<DatabaseHealth> {
+        let start = std::time::Instant::now();
+        
+        sqlx::query("SELECT 1")
+            .fetch_one(&self.pool)
+            .await?;
+            
+        let response_time = start.elapsed();
+        let pool_state = self.pool.state();
+
+        Ok(DatabaseHealth {
+            is_healthy: true,
+            response_time_ms: response_time.as_millis() as u64,
+            active_connections: pool_state.connections,
+            idle_connections: pool_state.idle_connections,
+        })
     }
 }
 
@@ -258,4 +296,12 @@ pub struct TapEventRecord {
     pub event_time: chrono::DateTime<chrono::Utc>,
     pub user_id: i64,
     pub tap_count: i32,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct DatabaseHealth {
+    pub is_healthy: bool,
+    pub response_time_ms: u64,
+    pub active_connections: u32,
+    pub idle_connections: u32,
 }
