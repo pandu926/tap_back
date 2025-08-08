@@ -1,0 +1,364 @@
+warning: unused import: `warn`
+  --> src/main.rs:16:21
+   |
+16 | use tracing::{info, warn};
+   |                     ^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
+
+warning: unused imports: `DateTime` and `Utc`
+ --> src/models/leaderboard.rs:1:14
+  |
+1 | use chrono::{DateTime, Utc};
+  |              ^^^^^^^^  ^^^
+
+warning: unused imports: `DeserializeRow` and `value::CqlTimestamp`
+ --> src/models/leaderboard.rs:2:14
+  |
+2 | use scylla::{value::CqlTimestamp, DeserializeRow};
+  |              ^^^^^^^^^^^^^^^^^^^  ^^^^^^^^^^^^^^
+
+warning: unused import: `std::collections::HashMap`
+ --> src/models/leaderboard.rs:4:5
+  |
+4 | use std::collections::HashMap;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `uuid::Uuid`
+ --> src/models/leaderboard.rs:5:5
+  |
+5 | use uuid::Uuid;
+  |     ^^^^^^^^^^
+
+warning: unused import: `value::CqlTimestamp`
+ --> src/models/task.rs:1:14
+  |
+1 | use scylla::{value::CqlTimestamp, DeserializeRow};
+  |              ^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `leaderboard_repository::LeaderboardRepository`
+ --> src/repositories/mod.rs:7:9
+  |
+7 | pub use leaderboard_repository::LeaderboardRepository;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `referral_repository::ReferralRepository`
+ --> src/repositories/mod.rs:9:9
+  |
+9 | pub use referral_repository::ReferralRepository;
+  |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `shop_repository::ShopRepository`
+  --> src/repositories/mod.rs:10:9
+   |
+10 | pub use shop_repository::ShopRepository;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `task_repository::TaskRepository`
+  --> src/repositories/mod.rs:11:9
+   |
+11 | pub use task_repository::TaskRepository;
+   |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: unused import: `error`
+ --> src/routes/mod.rs:7:15
+  |
+7 | use tracing::{error, info};
+  |               ^^^^^
+
+warning: unused import: `Result`
+  --> src/main.rs:30:31
+   |
+30 | use crate::errors::{AppError, Result};
+   |                               ^^^^^^
+
+warning: unused variable: `shard_id`
+  --> src/repositories/leaderboard_repository.rs:83:18
+   |
+83 |             let (shard_id, user_id, username, score) = entry_result?;
+   |                  ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_shard_id`
+   |
+   = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `e`
+   --> src/repositories/referral_repository.rs:177:23
+    |
+177 |             .map_err(|e| anyhow::anyhow!("Failed to get rows"))?
+    |                       ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: unused variable: `get_quantity_stmt`
+  --> src/repositories/shop_repository.rs:94:13
+   |
+94 |         let get_quantity_stmt = Arc::new(
+   |             ^^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_get_quantity_stmt`
+
+warning: unused variable: `e`
+   --> src/repositories/task_repository.rs:166:23
+    |
+166 |             .map_err(|e| {
+    |                       ^ help: if this is intentional, prefix it with an underscore: `_e`
+
+warning: this function depends on never type fallback being `()`
+   --> src/services/redis_service.rs:103:5
+    |
+103 |     pub async fn warm_up_cache(&self, user_id: i64, score: i64, energy: i32) -> Result<()> {
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = warning: this was previously accepted by the compiler but is being phased out; it will become a hard error in Rust 2024 and in a future release in all editions!
+    = note: for more information, see <https://doc.rust-lang.org/nightly/edition-guide/rust-2024/never-type-fallback.html>
+    = help: specify the types explicitly
+note: in edition 2024, the requirement `!: FromRedisValue` will fail
+   --> src/services/redis_service.rs:113:14
+    |
+113 |         pipe.query_async(&mut conn).await?;
+    |              ^^^^^^^^^^^
+    = note: `#[warn(dependency_on_unit_never_type_fallback)]` on by default
+help: use `()` annotations to avoid fallback changes
+    |
+113 |         pipe.query_async::<()>(&mut conn).await?;
+    |                         ++++++
+
+warning: unused variable: `middleware_stack`
+   --> src/main.rs:138:9
+    |
+138 |     let middleware_stack = ServiceBuilder::new()
+    |         ^^^^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_middleware_stack`
+
+warning: function `update_circuit_breaker_on_error` is never used
+ --> src/circuit_breaker.rs:6:14
+  |
+6 | pub async fn update_circuit_breaker_on_error(state: &AppState, error: &anyhow::Error) {
+  |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(dead_code)]` on by default
+
+warning: fields `id`, `username`, `first_name`, and `last_name` are never read
+  --> src/models/player.rs:59:9
+   |
+58 | pub struct ValidatedUser {
+   |            ------------- fields in this struct
+59 |     pub id: i64,
+   |         ^^
+60 |     pub username: Option<String>,
+   |         ^^^^^^^^
+61 |     pub first_name: Option<String>,
+   |         ^^^^^^^^^^
+62 |     pub last_name: Option<String>,
+   |         ^^^^^^^^^
+   |
+   = note: `ValidatedUser` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+warning: struct `LeaderboardRepository` is never constructed
+ --> src/repositories/leaderboard_repository.rs:9:12
+  |
+9 | pub struct LeaderboardRepository {
+  |            ^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `LeaderboardRepository` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: associated items `new`, `update_score`, `get_leaderboard`, `get_player_rank`, and `get_player_score` are never used
+   --> src/repositories/leaderboard_repository.rs:17:18
+    |
+16  | impl LeaderboardRepository {
+    | -------------------------- associated items in this implementation
+17  |     pub async fn new(db: Database) -> Result<Self> {
+    |                  ^^^
+...
+48  |     pub async fn update_score(
+    |                  ^^^^^^^^^^^^
+...
+66  |     pub async fn get_leaderboard(&self, limit: i32) -> Result<Vec<LeaderboardResponse>> {
+    |                  ^^^^^^^^^^^^^^^
+...
+98  |     pub async fn get_player_rank(&self, user_id: i64) -> Result<Option<i32>> {
+    |                  ^^^^^^^^^^^^^^^
+...
+122 |     async fn get_player_score(&self, user_id: i64) -> Result<i64> {
+    |              ^^^^^^^^^^^^^^^^
+
+warning: struct `ReferralRepository` is never constructed
+ --> src/repositories/referral_repository.rs:8:12
+  |
+8 | pub struct ReferralRepository {
+  |            ^^^^^^^^^^^^^^^^^^
+  |
+  = note: `ReferralRepository` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: multiple associated items are never used
+   --> src/repositories/referral_repository.rs:19:18
+    |
+18  | impl ReferralRepository {
+    | ----------------------- associated items in this implementation
+19  |     pub async fn new(db: Database) -> Result<Self> {
+    |                  ^^^
+...
+79  |     pub async fn create_referral(&self, referrer_id: i64, referred_user_id: i64) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^
+...
+93  |     pub async fn get_referral(
+    |                  ^^^^^^^^^^^^
+...
+114 |     pub async fn get_referrals_by_referrer(&self, referrer_id: i64) -> Result<Vec<Referral>> {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+136 |     pub async fn get_referrals_by_referred(&self, referred_user_id: i64) -> Result<Vec<Referral>> {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+158 |     pub async fn delete_referral(&self, referrer_id: i64, referred_user_id: i64) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^
+...
+167 |     pub async fn count_referrals(&self, referrer_id: i64) -> Result<i64> {
+    |                  ^^^^^^^^^^^^^^^
+
+warning: struct `ShopRepository` is never constructed
+  --> src/repositories/shop_repository.rs:11:12
+   |
+11 | pub struct ShopRepository {
+   |            ^^^^^^^^^^^^^^
+   |
+   = note: `ShopRepository` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: multiple associated items are never used
+   --> src/repositories/shop_repository.rs:26:18
+    |
+25  | impl ShopRepository {
+    | ------------------- associated items in this implementation
+26  |     pub async fn new(db: Database) -> Result<Self> {
+    |                  ^^^
+...
+127 |     pub async fn create_shop_item(&self, request: CreateShopItemRequest) -> Result<i32> {
+    |                  ^^^^^^^^^^^^^^^^
+...
+149 |     pub async fn get_shop_item(&self, category: &str, item_id: i32) -> Result<Option<ShopItem>> {
+    |                  ^^^^^^^^^^^^^
+...
+166 |     pub async fn get_shop_items_by_category(&self, category: &str) -> Result<Vec<ShopItem>> {
+    |                  ^^^^^^^^^^^^^^^^^^^^^^^^^^
+...
+188 |     pub async fn update_shop_item(
+    |                  ^^^^^^^^^^^^^^^^
+...
+208 |     pub async fn delete_shop_item(&self, category: &str, item_id: i32) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^^
+...
+217 |     pub async fn purchase_item(&self, request: &PurchaseItemRequest) -> Result<()> {
+    |                  ^^^^^^^^^^^^^
+...
+253 |     pub async fn get_player_item(&self, user_id: i64, item_id: i32) -> Result<Option<PlayerItem>> {
+    |                  ^^^^^^^^^^^^^^^
+...
+270 |     pub async fn get_player_items(&self, user_id: i64) -> Result<Vec<PlayerItem>> {
+    |                  ^^^^^^^^^^^^^^^^
+...
+290 |     pub async fn activate_item(&self, user_id: i64, item_id: i32, is_active: bool) -> Result<()> {
+    |                  ^^^^^^^^^^^^^
+
+warning: struct `TaskRepository` is never constructed
+  --> src/repositories/task_repository.rs:12:12
+   |
+12 | pub struct TaskRepository {
+   |            ^^^^^^^^^^^^^^
+   |
+   = note: `TaskRepository` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: multiple associated items are never used
+   --> src/repositories/task_repository.rs:28:18
+    |
+27  | impl TaskRepository {
+    | ------------------- associated items in this implementation
+28  |     pub async fn new(db: Database) -> Result<Self> {
+    |                  ^^^
+...
+122 |     pub async fn create_task(&self, request: CreateTaskRequest) -> Result<Uuid> {
+    |                  ^^^^^^^^^^^
+...
+143 |     pub async fn get_task(&self, task_type: &str, task_id: Uuid) -> Result<Option<Task>> {
+    |                  ^^^^^^^^
+...
+160 |     pub async fn get_tasks_by_type(&self, task_type: &str) -> Result<Vec<Task>> {
+    |                  ^^^^^^^^^^^^^^^^^
+...
+187 |     pub async fn update_task(
+    |                  ^^^^^^^^^^^
+...
+214 |     pub async fn delete_task(&self, task_type: &str, task_id: Uuid) -> Result<()> {
+    |                  ^^^^^^^^^^^
+...
+223 |     pub async fn update_task_progress(&self, request: UpdateTaskProgressRequest) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^^^^^^
+...
+256 |     pub async fn get_player_task(&self, user_id: i64, task_id: Uuid) -> Result<Option<PlayerTask>> {
+    |                  ^^^^^^^^^^^^^^^
+...
+273 |     pub async fn get_player_tasks(&self, user_id: i64) -> Result<Vec<PlayerTask>> {
+    |                  ^^^^^^^^^^^^^^^^
+...
+293 |     pub async fn complete_task(&self, user_id: i64, task_id: Uuid) -> Result<()> {
+    |                  ^^^^^^^^^^^^^
+...
+304 |     pub async fn claim_task_reward(&self, user_id: i64, task_id: Uuid) -> Result<()> {
+    |                  ^^^^^^^^^^^^^^^^^
+
+warning: field `timestamp` is never read
+  --> src/routes/mod.rs:21:9
+   |
+19 | pub struct TapBatchRequest {
+   |            --------------- field in this struct
+20 |     pub taps: Vec<TapEvent>,
+21 |     pub timestamp: i64,
+   |         ^^^^^^^^^
+   |
+   = note: `TapBatchRequest` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: function `handle_sync_session` is never used
+   --> src/routes/mod.rs:143:14
+    |
+143 | pub async fn handle_sync_session(
+    |              ^^^^^^^^^^^^^^^^^^^
+
+warning: `scylla-game-db` (bin "scylla-game-db") generated 30 warnings (run `cargo fix --bin "scylla-game-db"` to apply 13 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.10s
+     Running `target/debug/scylla-game-db`
+{"timestamp":"2025-08-05T05:03:42.173099Z","level":"INFO","fields":{"message":"✅ Redis connection pool created with 50 max connections"}}
+{"timestamp":"2025-08-05T05:03:42.186054Z","level":"WARN","fields":{"message":"Response from the database contains a warning","warning":"SimpleStrategy replication class is not recommended, but was used for keyspace ta_game. You may suppress this warning by delisting SimpleStrategy from replication_strategy_warn_list configuration option, or make it into an error by listing this replication strategy on replication_strategy_fail_list."}}
+{"timestamp":"2025-08-05T05:03:42.186138Z","level":"WARN","fields":{"message":"Response from the database contains a warning","warning":"Using Replication Factor replication_factor=1 lower than the minimum_replication_factor_warn_threshold=3 is not recommended."}}
+{"timestamp":"2025-08-05T05:03:43.869713Z","level":"INFO","fields":{"message":"All tables created successfully"}}
+{"timestamp":"2025-08-05T05:03:43.869781Z","level":"INFO","fields":{"message":"Connected to ScyllaDB with keyspace: ta_game"}}
+{"timestamp":"2025-08-05T05:03:43.872470Z","level":"INFO","fields":{"message":"🚦 Flush semaphore configured for 32 concurrent operations"}}
+{"timestamp":"2025-08-05T05:03:43.872648Z","level":"INFO","fields":{"message":"🔧 Worker 1 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872738Z","level":"INFO","fields":{"message":"🔧 Worker 6 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872648Z","level":"INFO","fields":{"message":"🔧 Worker 0 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872740Z","level":"INFO","fields":{"message":"🔧 Worker 3 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872743Z","level":"INFO","fields":{"message":"🔧 Worker 2 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872908Z","level":"INFO","fields":{"message":"🔧 Worker 9 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872777Z","level":"INFO","fields":{"message":"🔧 Worker 7 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872795Z","level":"INFO","fields":{"message":"🛡️ Middleware configured: buffer=10000, rate_limit=60000/min"}}
+{"timestamp":"2025-08-05T05:03:43.872965Z","level":"INFO","fields":{"message":"🔧 Worker 11 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872841Z","level":"INFO","fields":{"message":"🔧 Worker 4 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872989Z","level":"INFO","fields":{"message":"🔧 Worker 14 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872922Z","level":"INFO","fields":{"message":"🔧 Worker 16 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873040Z","level":"INFO","fields":{"message":"🔧 Worker 23 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873078Z","level":"INFO","fields":{"message":"🔧 Worker 15 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873117Z","level":"INFO","fields":{"message":"🔧 Worker 8 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873129Z","level":"INFO","fields":{"message":"🔧 Worker 22 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872890Z","level":"INFO","fields":{"message":"🔧 Worker 13 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.872984Z","level":"INFO","fields":{"message":"🔧 Worker 20 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873184Z","level":"INFO","fields":{"message":"🔧 Worker 28 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873063Z","level":"INFO","fields":{"message":"🔧 Worker 18 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873084Z","level":"INFO","fields":{"message":"🔧 Worker 12 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873200Z","level":"INFO","fields":{"message":"🔧 Worker 25 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873215Z","level":"INFO","fields":{"message":"🔧 Worker 31 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873083Z","level":"INFO","fields":{"message":"🔧 Worker 5 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873134Z","level":"INFO","fields":{"message":"🔧 Worker 26 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873259Z","level":"INFO","fields":{"message":"🔧 Worker 19 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873262Z","level":"INFO","fields":{"message":"🔧 DLQ Retry Worker started. Checking every 5 minutes."},"span":{"name":"dlq_retry_worker"},"spans":[{"name":"dlq_retry_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873283Z","level":"INFO","fields":{"message":"🔧 Worker 17 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873168Z","level":"INFO","fields":{"message":"🔧 Worker 24 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873196Z","level":"INFO","fields":{"message":"🔧 Worker 29 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873290Z","level":"INFO","fields":{"message":"🔧 Worker 27 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873003Z","level":"INFO","fields":{"message":"🔧 Worker 10 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873319Z","level":"INFO","fields":{"message":"🔧 Worker 30 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873292Z","level":"INFO","fields":{"message":"🔧 Worker 21 started"},"span":{"name":"adaptive_background_worker"},"spans":[{"name":"adaptive_background_worker"}]}
+{"timestamp":"2025-08-05T05:03:43.873332Z","level":"INFO","fields":{"message":"🚀 Server listening on 0.0.0.0:3001 with 32 workers"}}
+{"timestamp":"2025-08-05T05:03:43.874971Z","level":"INFO","fields":{"message":"📊 Metrics: requests=0, processed=0, queue=0, errors=0"},"span":{"name":"metrics_collector"},"spans":[{"name":"metrics_collector"}]}
+{"timestamp":"2025-08-05T05:03:44.528484Z","level":"INFO","fields":{"message":"🛑 Graceful shutdown initiated."}}

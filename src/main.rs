@@ -1,95 +1,221 @@
-use axum::{routing::post, Router};
-use tokio::time::{ Duration};
-use tower_http::cors::CorsLayer;
-use tracing::{info, error, warn};
+// src/main.rs
 
+use axum::body::Body;
+use axum::http::{HeaderValue, Method, Request};
+use axum::routing::get;
+use axum::Extension;
+use axum::{routing::post, Router};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
+use tokio::net::TcpListener;
+use tokio::sync::{RwLock, Semaphore};
+use tower::buffer::BufferLayer;
+use tower::limit::RateLimitLayer;
+use tower::ServiceBuilder;
+use tower_http::compression::CompressionLayer;
+use tower_http::cors::CorsLayer;
+use tower_http::limit::RequestBodyLimitLayer;
+use tower_http::trace::TraceLayer;
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
+
+// Local modules
+mod circuit_breaker;
+mod config;
+mod controllers;
+mod database;
+mod errors;
 mod middleware;
+mod models;
+mod monitoring;
+mod repositories;
 mod routes;
 mod services;
-mod models;
-mod errors;
+mod workers; // <-- TAMBAHKAN INI
 
-use services::{RedisService, DatabaseService};
+use crate::controllers::auth_controller;
+use crate::errors::{AppError, Result};
+use crate::repositories::player_repository::PlayerRepository;
+use crate::services::redis_service::RedisService;
+// Gunakan fungsi dari modul background
+use crate::workers::{adaptive_background_worker, dlq_retry_worker};
 
 #[derive(Clone)]
 pub struct AppState {
     pub redis_service: RedisService,
-    pub database_service: DatabaseService,
-    pub bot_token: String,
+    pub player_repo: PlayerRepository,
+    pub metrics: Arc<RwLock<AppMetrics>>,
+    pub flush_semaphore: Arc<Semaphore>,
+    pub circuit_breaker: Arc<RwLock<CircuitBreakerState>>,
 }
 
-fn main() -> anyhow::Result<()> {
-    // Optimized runtime configuration
-  
+#[derive(Debug, Default, Clone)]
+pub struct AppMetrics {
+    pub total_requests: u64,
+    pub tap_events_processed: u64,
+    pub database_writes: u64,
+    pub failed_requests: u64,
+    pub current_queue_size: u64,
+    pub avg_response_time_ms: u64,
+    pub worker_cycles_completed: u64,
+    pub circuit_breaker_trips: u64,
+}
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(6)
-        .thread_stack_size(4 * 1024 * 1024) // 4MB stack untuk complex operations
-        .thread_keep_alive(Duration::from_secs(300)) // 5 menit keep-alive
-        .thread_name("tap-game-worker")
-        .enable_all()
-        .build()?;
-        
-    runtime.block_on(async {
-        // Optimized tracing configuration
-        #[cfg(debug_assertions)]
-        let max_level = tracing::Level::INFO;
-        #[cfg(not(debug_assertions))]
-        let max_level = tracing::Level::WARN;
-        
+#[derive(Debug, Default, Clone)]
+pub struct CircuitBreakerState {
+    pub redis_failures: u32,
+    pub db_failures: u32,
+    pub last_failure_time: Option<std::time::Instant>,
+    pub is_redis_open: bool,
+    pub is_db_open: bool,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    // Initialize logging
+    if std::env::var("ENABLE_CONSOLE").is_ok() {
+        console_subscriber::init();
+    } else {
         tracing_subscriber::fmt()
-            .with_max_level(max_level)
+            .with_env_filter(
+                EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            )
             .with_target(false)
-            .compact()
+            .json()
             .init();
+    }
 
-        dotenvy::dotenv().ok();
-        
-        // Parallel service initialization
-        let (redis_service, database_service) = tokio::try_join!(
-            RedisService::new(),
-            DatabaseService::new()
-        )?;
-        
-        let bot_token = std::env::var("BOT_TOKEN").expect("BOT_TOKEN must be set");
-        
-        let app_state = AppState {
-            redis_service,
-            database_service,
-            bot_token,
-        };
-        
-        // Start optimized background worker
-        let worker_state = app_state.clone();
-        tokio::spawn(async move {
-            background_worker(worker_state).await;
-        });
-        
-        // Create router with optimized middleware order
-        let app = Router::new()
-            .route("/api/v1/tap", post(routes::handle_tap_batch))
-            .layer(axum::middleware::from_fn_with_state(
-                app_state.clone(),
-                middleware::validate_init_data
-            ))
-            .layer(CorsLayer::permissive())
-            .with_state(app_state);
-        
-        // Optimized TCP listener
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:3001").await?;
-        
-        // Set socket options for better performance
-        if let Ok(socket) = listener.local_addr() {
-            info!("Server starting on http://{}", socket);
+    dotenvy::dotenv().ok();
+
+    // Initialize services with timeout
+    let (redis_service, player_repo) = tokio::time::timeout(Duration::from_secs(30), async {
+        let redis = RedisService::new().await?;
+        let db = database::Database::new().await?;
+        let player_repo = PlayerRepository::new(db).await?;
+        Ok::<_, AppError>((redis, player_repo))
+    })
+    .await??;
+
+    let metrics = Arc::new(RwLock::new(AppMetrics::default()));
+    let circuit_breaker = Arc::new(RwLock::new(CircuitBreakerState::default()));
+
+    let max_concurrent_flushes = std::env::var("MAX_CONCURRENT_FLUSHES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(num_cpus::get() * 2);
+
+    let flush_semaphore = Arc::new(Semaphore::new(max_concurrent_flushes));
+    info!(
+        "🚦 Flush semaphore configured for {} concurrent operations",
+        max_concurrent_flushes
+    );
+
+    let app_state = AppState {
+        redis_service,
+        player_repo,
+        metrics,
+        flush_semaphore,
+        circuit_breaker,
+    };
+
+    // Start background workers
+    let num_workers = std::env::var("BACKGROUND_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(num_cpus::get() * 2);
+
+    for worker_id in 0..num_workers {
+        tokio::spawn(adaptive_background_worker(app_state.clone(), worker_id));
+    }
+    tokio::spawn(dlq_retry_worker(app_state.clone()));
+    // Start monitoring tasks
+    tokio::spawn(monitoring::health_monitor(app_state.clone()));
+    tokio::spawn(monitoring::metrics_collector(app_state.clone()));
+    tokio::spawn(monitoring::circuit_breaker_monitor(app_state.clone()));
+
+    // Configure middleware
+    let rate_limit_per_minute = std::env::var("RATE_LIMIT_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60_000);
+
+    let buffer_size = std::env::var("BUFFER_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000);
+let cors_layer = CorsLayer::new()
+    .allow_origin("https://sdsd-ashy.vercel.app".parse::<HeaderValue>().unwrap())
+    .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+    .allow_headers(tower_http::cors::Any);
+
+    let middleware_stack = ServiceBuilder::new()
+        .layer(BufferLayer::<Request<Body>>::new(buffer_size))
+        .layer(RateLimitLayer::new(rate_limit_per_minute, Duration::from_secs(60)))
+        .layer(TraceLayer::new_for_http()
+            .make_span_with(|request: &Request<Body>| {
+                tracing::info_span!("request", method = %request.method(), uri = %request.uri())
+            }))
+        .layer(RequestBodyLimitLayer::new(8 * 1024))
+        .layer(CorsLayer::permissive())
+        .layer(CompressionLayer::new().gzip(true).br(false));
+
+    info!(
+        "🛡️ Middleware configured: buffer={}, rate_limit={}/min",
+        buffer_size, rate_limit_per_minute
+    );
+
+    // Configure routes
+    let public_routes = Router::new()
+        .route("/api/v1/health", axum::routing::get(routes::health_check))
+        .route("/api/v1/auth", axum::routing::post(routes::auth_telegram));
+
+    // Router private (pakai middleware dummy_user_id_auth)
+    let private_routes = Router::new()
+        .route("/api/v1/tap", post(routes::handle_tap_batch))
+        .route("/api/v1/user", get(routes::get_user_by_id_handler))
+        .route("/api/v1/metrics", get(routes::get_metrics))
+        .layer(axum::middleware::from_fn(middleware::verify_auth))
+        .with_state(app_state.clone());
+
+    let app = public_routes
+        .merge(private_routes)
+        .layer(cors_layer)
+        .with_state(app_state.clone());
+    // Configure TCP listener
+    let addr: SocketAddr = "0.0.0.0:3001".parse()?;
+    let listener = {
+        let socket = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)?;
+        socket.set_reuse_address(true)?;
+
+        #[cfg(target_os = "linux")]
+        {
+            socket.set_reuse_port(true)?;
+            socket.set_recv_buffer_size(262144)?;
+            socket.set_send_buffer_size(262144)?;
+            socket.set_tcp_nodelay(true)?;
         }
-        
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
-        
-        Ok::<(), anyhow::Error>(())
-    })?;
-    
+        socket.set_nonblocking(true)?;
+        socket.bind(&addr.into())?;
+
+        let backlog = std::env::var("TCP_BACKLOG")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(4096);
+        socket.listen(backlog)?;
+
+        TcpListener::from_std(socket.into())?
+    };
+
+    info!(
+        "🚀 Server listening on {} with {} workers",
+        addr, num_workers
+    );
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await?;
+
     Ok(())
 }
 
@@ -97,7 +223,7 @@ async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
-            .expect("Failed to install CTRL+C signal handler");
+            .expect("Failed to install CTRL+C handler");
     };
 
     #[cfg(unix)]
@@ -115,158 +241,5 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    
-    info!("Graceful shutdown initiated");
-}
-
-async fn background_worker(state: AppState) {
-    let base_interval = Duration::from_secs(5);
-    let mut current_interval = base_interval;
-    let mut consecutive_empty = 0;
-    const MAX_EMPTY_RUNS: u32 = 6;
-    
-    info!("Background worker started with adaptive scheduling");
-    
-    loop {
-        tokio::time::sleep(current_interval).await;
-        
-        // Estimate workload before processing
-        let estimated_dirty = match state.redis_service.estimate_dirty_count().await {
-            Ok(count) => count,
-            Err(e) => {
-                warn!("Failed to estimate dirty count: {}", e);
-                0
-            }
-        };
-        
-        // Skip processing if no work detected
-        if estimated_dirty == 0 {
-            consecutive_empty += 1;
-            current_interval = std::cmp::min(
-                Duration::from_secs(30),
-                base_interval * 2_u32.pow(consecutive_empty.min(3))
-            );
-            continue;
-        }
-        
-        // Dynamic batch size based on workload
-        let batch_size = match estimated_dirty {
-            0..=50 => 25,
-            51..=200 => 100,
-            201..=500 => 250,
-            _ => 500,
-        };
-        
-        let flush_future = flush_dirty_users(&state, batch_size);
-        let timeout_duration = Duration::from_secs(std::cmp::max(10, (estimated_dirty / 50) as u64));
-        
-        match tokio::time::timeout(timeout_duration, flush_future).await {
-            Ok(Ok(count)) => {
-                if count > 0 {
-                    info!("Flushed {} dirty users in batch", count);
-                    consecutive_empty = 0;
-                    current_interval = base_interval; // Reset to aggressive
-                } else {
-                    consecutive_empty += 1;
-                }
-            }
-            Ok(Err(e)) => {
-                error!("Flush operation failed: {}", e);
-                consecutive_empty = 0;
-                current_interval = Duration::from_secs(15); // Moderate retry interval
-            }
-            Err(_) => {
-                error!("Flush operation timed out after {:?}", timeout_duration);
-                consecutive_empty = 0;
-                current_interval = Duration::from_secs(10);
-            }
-        }
-        
-        // Adaptive interval adjustment
-        if consecutive_empty >= MAX_EMPTY_RUNS {
-            current_interval = Duration::from_secs(30); // Slow down when consistently idle
-        }
-    }
-}
-
-async fn flush_dirty_users(state: &AppState, batch_size: usize) -> anyhow::Result<usize> {
-    // Get dirty users in controlled batches
-    let dirty_users = state.redis_service.get_dirty_users_batch(batch_size).await?;
-    
-    if dirty_users.is_empty() {
-        return Ok(0);
-    }
-    
-    // Parallel score fetching with chunking
-    let chunk_size = std::cmp::min(50, dirty_users.len());
-    let score_futures: Vec<_> = dirty_users
-        .chunks(chunk_size)
-        .map(|chunk| {
-            let redis_service = state.redis_service.clone();
-            let chunk_vec = chunk.to_vec();
-            tokio::spawn(async move {
-                redis_service.get_scores_batch(&chunk_vec).await
-            })
-        })
-        .collect();
-    
-    // Collect results with error handling
-    let mut all_updates = Vec::new();
-    for future in score_futures {
-        match future.await {
-            Ok(Ok(updates)) => all_updates.extend(updates),
-            Ok(Err(e)) => warn!("Batch score fetch failed: {}", e),
-            Err(e) => warn!("Score fetch task panicked: {}", e),
-        }
-    }
-    
-    if all_updates.is_empty() {
-        return Ok(0);
-    }
-    
-    // Chunked database operations with optimized retry
-    let db_chunk_size = std::cmp::min(500, all_updates.len());
-    let mut total_processed = 0;
-    
-    for chunk in all_updates.chunks(db_chunk_size) {
-        let mut retry_count = 0;
-        const MAX_RETRIES: u32 = 3;
-        
-        loop {
-            match state.database_service.bulk_upsert_scores(chunk).await {
-                Ok(_) => {
-                    // Clear successfully processed scores
-                    let user_ids: Vec<_> = chunk.iter().map(|u| u.user_id).collect();
-                    if let Err(e) = state.redis_service.clear_scores_batch(&user_ids).await {
-                        warn!("Failed to clear scores batch: {}", e);
-                    }
-                    total_processed += chunk.len();
-                    break;
-                }
-                Err(e) => {
-                    retry_count += 1;
-                    if retry_count >= MAX_RETRIES {
-                        error!("Database write failed after {} retries: {}", MAX_RETRIES, e);
-                        
-                        // Move failed batch to DLQ
-                        if let Err(dlq_err) = state.redis_service.move_to_dlq(chunk).await {
-                            error!("Failed to move batch to DLQ: {}", dlq_err);
-                        } else {
-                            warn!("Moved {} updates to DLQ", chunk.len());
-                        }
-                        break;
-                    }
-                    
-                    // Exponential backoff with jitter
-                    let base_delay = Duration::from_millis(100 * 2_u64.pow(retry_count));
-                    let jitter = Duration::from_millis(fastrand::u64(0..=50));
-                    tokio::time::sleep(base_delay + jitter).await;
-                    
-                    warn!("Database write retry {} for {} updates", retry_count, chunk.len());
-                }
-            }
-        }
-    }
-    
-    Ok(total_processed)
+    info!("🛑 Graceful shutdown initiated.");
 }

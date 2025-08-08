@@ -1,338 +1,324 @@
-use sqlx::{PgPool, Row, Acquire};
-use sqlx::postgres::PgPoolOptions;
+// use crate::database::Database;
+// use crate::models::player::*;
+// use crate::repositories::{
+//     LeaderboardRepository, PlayerRepository, ReferralRepository, ShopRepository, TaskRepository,
+// };
+// use anyhow::Result;
+// use tracing::info;
+// use uuid::Uuid;
 
-use tracing::info;
+// #[derive(Clone)]
+// pub struct GameService {
+//     pub player_repo: PlayerRepository,
+//     pub task_repo: TaskRepository,
+//     pub shop_repo: ShopRepository,
+//     pub referral_repo: ReferralRepository,
+//     pub leaderboard_repo: LeaderboardRepository,
+// }
 
-use crate::{
-    errors::{AppError, Result},
-    models::{UserScoreUpdate, TapEventLog},
-};
+// impl GameService {
+//     pub async fn new(db: Database) -> Result<Self> {
+//         info!("🔧 Initializing player_repo...");
+//         let player_repo = PlayerRepository::new(db.clone())
+//             .await
+//             .map_err(|e| anyhow::anyhow!("Failed to init player_repo: {}", e))?;
 
-#[derive(Clone)]
-pub struct DatabaseService {
-    pool: PgPool,
-}
+//         info!("🔧 Initializing task_repo...");
+//         let task_repo = TaskRepository::new(db.clone())
+//             .await
+//             .map_err(|e| anyhow::anyhow!("Failed to init task_repo: {}", e))?;
 
-impl DatabaseService {
-    pub async fn new() -> Result<Self> {
-        let database_url = std::env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set");
+//         info!("🔧 Initializing shop_repo...");
+//         let shop_repo = ShopRepository::new(db.clone())
+//             .await
+//             .map_err(|e| anyhow::anyhow!("Failed to init shop_repo: {}", e))?;
 
+//         info!("🔧 Initializing referral_repo...");
+//         let referral_repo = ReferralRepository::new(db.clone())
+//             .await
+//             .map_err(|e| anyhow::anyhow!("Failed to init referral_repo: {}", e))?;
 
+//         info!("🔧 Initializing leaderboard_repo...");
+//         let leaderboard_repo = LeaderboardRepository::new(db)
+//             .await
+//             .map_err(|e| anyhow::anyhow!("Failed to init leaderboard_repo: {}", e))?;
 
-        let pool = PgPoolOptions::new()
-            .max_connections(200)                    // Reduced for PgBouncer stability
-            .min_connections(50)
-            .acquire_timeout(std::time::Duration::from_secs(15))
-            .idle_timeout(std::time::Duration::from_secs(900))
-            .max_lifetime(std::time::Duration::from_secs(3600)) // Shorter lifetime
-            .test_before_acquire(false)             // Disable to avoid prepared statements
-            .connect(&database_url)
-            .await?;
+//         info!("✅ All repositories initialized");
 
-        // Test connection with simple query - no prepared statements
-        let mut conn = pool.acquire().await?;
-        let _: (i32,) = sqlx::query_as("SELECT 1 as test")
-            .fetch_one(&mut *conn)
-            .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("Database connection test failed: {}", e)))?;
+//         Ok(Self {
+//             player_repo,
+//             task_repo,
+//             shop_repo,
+//             referral_repo,
+//             leaderboard_repo,
+//         })
+//     }
 
-        info!("Database connection pool established via PgBouncer (transaction mode) - prepared statements disabled");
-        Ok(Self { pool })
-    }
+//     // Player operations
+//     pub async fn create_player(&self, request: CreatePlayerRequest) -> Result<()> {
+//         // Create player
+//         self.player_repo.create(request.clone()).await?;
 
-    pub async fn bulk_upsert_scores(&self, updates: &[UserScoreUpdate]) -> Result<()> {
-        if updates.is_empty() {
-            return Ok(());
-        }
+//         // Handle referral if exists
+//         if let Some(referred_by_id) = request.referred_by_id {
+//             self.referral_repo
+//                 .create_referral(referred_by_id, request.user_id)
+//                 .await?;
 
-        for u in updates.iter().take(10) {
-            info!("User {}: +{} score", u.user_id, u.score_increment);
-        }
-        info!("...total {} users flushed", updates.len());
+//             // Award referral bonus to referrer
+//             self.player_repo.update_score(referred_by_id, 1000).await?;
+//             self.leaderboard_repo
+//                 .update_score(referred_by_id, None, 1000)
+//                 .await?;
+//         }
 
-        // Separate user_ids and score_increments for UNNEST
-        let user_ids: Vec<i64> = updates.iter().map(|u| u.user_id).collect();
-        let score_increments: Vec<i64> = updates.iter().map(|u| u.score_increment).collect();
+//         Ok(())
+//     }
 
-        // Use explicit transaction with fresh connection
-        let mut conn = self.pool.acquire().await?;
-        let mut tx = conn.begin().await?;
+//     pub async fn get_player(&self, user_id: i64) -> Result<Option<Player>> {
+//         self.player_repo.get_user_by_id(user_id).await
+//     }
 
-        sqlx::query(
-            r#"
-            INSERT INTO players (user_id, score, last_seen)
-            SELECT
-                user_id,
-                score_increment,
-                NOW()
-            FROM
-                UNNEST($1::bigint[], $2::bigint[]) AS t(user_id, score_increment)
-            ON CONFLICT (user_id) DO UPDATE
-            SET
-                score = players.score + excluded.score,
-                last_seen = NOW()
-            "#
-        )
-        .bind(&user_ids)
-        .bind(&score_increments)
-        .execute(&mut *tx)
-        .await?;
+//     pub async fn update_player(&self, request: UpdatePlayerRequest) -> Result<()> {
+//         self.player_repo.update(request).await
+//     }
 
-        tx.commit().await?;
-        Ok(())
-    }
+//     pub async fn add_score(
+//         &self,
+//         user_id: i64,
+//         score: i64,
+//         username: Option<String>,
+//     ) -> Result<()> {
+//         self.player_repo.update_score(user_id, score).await?;
+//         self.leaderboard_repo
+//             .update_score(user_id, username, score)
+//             .await?;
+//         Ok(())
+//     }
 
-    pub async fn log_tap_event(&self, log: &TapEventLog) -> Result<()> {
-        // Get fresh connection for each operation
-        let mut conn = self.pool.acquire().await?;
-        
-        sqlx::query(
-            "INSERT INTO tap_events (event_time, user_id, tap_count) VALUES ($1, $2, $3)"
-        )
-        .bind(log.event_time)
-        .bind(log.user_id)
-        .bind(log.tap_count)
-        .execute(&mut *conn)
-        .await?;
+//     // Task operations
+//     pub async fn create_task(&self, request: CreateTaskRequest) -> Result<Uuid> {
+//         self.task_repo.create_task(request).await
+//     }
 
-        Ok(())
-    }
+//     pub async fn get_daily_tasks(&self) -> Result<Vec<Task>> {
+//         self.task_repo.get_tasks_by_type("daily").await
+//     }
 
-    pub async fn bulk_copy_logs(&self, logs: &[TapEventLog]) -> Result<()> {
-        if logs.is_empty() {
-            return Ok(());
-        }
+//     pub async fn get_weekly_tasks(&self) -> Result<Vec<Task>> {
+//         self.task_repo.get_tasks_by_type("weekly").await
+//     }
 
-        const BATCH_SIZE: usize = 500; // Smaller batches for PgBouncer
-        
-        for chunk in logs.chunks(BATCH_SIZE) {
-            // Get fresh connection for each batch
-            let mut conn = self.pool.acquire().await?;
-            let mut tx = conn.begin().await?;
-            
-            // Collect values for batch insert
-            let event_times: Vec<_> = chunk.iter().map(|log| log.event_time).collect();
-            let user_ids: Vec<_> = chunk.iter().map(|log| log.user_id).collect();
-            let tap_counts: Vec<_> = chunk.iter().map(|log| log.tap_count).collect();
-            
-            sqlx::query(
-                "INSERT INTO tap_events (event_time, user_id, tap_count) SELECT * FROM UNNEST($1::timestamptz[], $2::bigint[], $3::integer[])"
-            )
-            .bind(&event_times)
-            .bind(&user_ids)
-            .bind(&tap_counts)
-            .execute(&mut *tx)
-            .await?;
-            
-            tx.commit().await?;
-        }
+//     pub async fn update_task_progress(&self, request: UpdateTaskProgressRequest) -> Result<()> {
+//         // Step 1: Update progress
+//         self.task_repo.update_task_progress(request.clone()).await?;
 
-        info!("Bulk inserted {} tap events in {} batches", logs.len(), (logs.len() + BATCH_SIZE - 1) / BATCH_SIZE);
-        Ok(())
-    }
+//         // Step 2: Coba ambil task dari "daily"
+//         let mut task = self.task_repo.get_task("daily", request.task_id).await?;
 
-    pub async fn get_user_by_id(&self, user_id: i64) -> Result<Option<PlayerRecord>> {
-        let mut conn = self.pool.acquire().await?;
-        
-        let record = sqlx::query(
-            "SELECT user_id, score, energy, last_seen FROM players WHERE user_id = $1"
-        )
-        .bind(user_id)
-        .map(|row: sqlx::postgres::PgRow| PlayerRecord {
-            user_id: row.get("user_id"),
-            score: row.get("score"),
-            energy: row.get("energy"),
-            last_seen: row.get("last_seen"),
-        })
-        .fetch_optional(&mut *conn)
-        .await?;
+//         // Step 3: Jika tidak ditemukan di "daily", coba "weekly"
+//         if task.is_none() {
+//             task = self.task_repo.get_task("weekly", request.task_id).await?;
+//         }
 
-        Ok(record)
-    }
+//         // Step 4: Jika task ditemukan dan sudah mencapai target, tandai sebagai selesai
+//         if let Some(task) = task {
+//             if let Some(target) = task.completion_target {
+//                 if request.progress >= target {
+//                     self.task_repo
+//                         .complete_task(request.user_id, request.task_id)
+//                         .await?;
+//                 }
+//             }
+//         }
 
-    pub async fn get_leaderboard(&self, limit: i64, offset: i64) -> Result<Vec<PlayerRecord>> {
-        let mut conn = self.pool.acquire().await?;
-        
-        let records = sqlx::query(
-            "SELECT user_id, score, energy, last_seen FROM players ORDER BY score DESC LIMIT $1 OFFSET $2"
-        )
-        .bind(limit)
-        .bind(offset)
-        .map(|row: sqlx::postgres::PgRow| PlayerRecord {
-            user_id: row.get("user_id"),
-            score: row.get("score"),
-            energy: row.get("energy"),
-            last_seen: row.get("last_seen"),
-        })
-        .fetch_all(&mut *conn)
-        .await?;
+//         Ok(())
+//     }
 
-        Ok(records)
-    }
+//     pub async fn claim_task_reward(&self, user_id: i64, task_id: Uuid) -> Result<i64> {
+//         // Coba ambil task dari "daily"
+//         let mut task = self.task_repo.get_task("daily", task_id).await?;
 
-    pub async fn get_user_rank(&self, user_id: i64) -> Result<Option<i64>> {
-        let mut conn = self.pool.acquire().await?;
-        
-        let result = sqlx::query(
-            r#"
-            WITH user_score AS (
-                SELECT score FROM players WHERE user_id = $1
-            )
-            SELECT COUNT(*) + 1 as rank
-            FROM players p, user_score us
-            WHERE p.score > us.score
-            "#
-        )
-        .bind(user_id)
-        .map(|row: sqlx::postgres::PgRow| row.get::<Option<i64>, _>("rank"))
-        .fetch_optional(&mut *conn)
-        .await?;
+//         // Jika tidak ditemukan, coba ambil dari "weekly"
+//         if task.is_none() {
+//             task = self.task_repo.get_task("weekly", task_id).await?;
+//         }
 
-        Ok(result.flatten())
-    }
+//         // Kalau tetap tidak ditemukan, return error
+//         let task = task.ok_or_else(|| anyhow::anyhow!("Task not found"))?;
 
-    pub async fn create_or_update_player(&self, user_id: i64) -> Result<()> {
-        let mut conn = self.pool.acquire().await?;
-        
-        sqlx::query(
-            "INSERT INTO players (user_id, score, energy, last_seen) VALUES ($1, 0, 1000, NOW()) ON CONFLICT (user_id) DO UPDATE SET last_seen = NOW()"
-        )
-        .bind(user_id)
-        .execute(&mut *conn)
-        .await?;
+//         // Ambil progress user terhadap task tsb
+//         let player_task = self
+//             .task_repo
+//             .get_player_task(user_id, task_id)
+//             .await?
+//             .ok_or_else(|| anyhow::anyhow!("Player task not found"))?;
 
-        Ok(())
-    }
+//         // Cek apakah sudah diselesaikan
+//         if player_task.completed_at.is_none() {
+//             return Err(anyhow::anyhow!("Task not completed"));
+//         }
 
-    pub async fn get_tap_events_for_user(
-        &self, 
-        user_id: i64, 
-        limit: i64, 
-        offset: i64
-    ) -> Result<Vec<TapEventRecord>> {
-        let mut conn = self.pool.acquire().await?;
-        
-        let records = sqlx::query(
-            "SELECT event_time, user_id, tap_count FROM tap_events WHERE user_id = $1 ORDER BY event_time DESC LIMIT $2 OFFSET $3"
-        )
-        .bind(user_id)
-        .bind(limit)
-        .bind(offset)
-        .map(|row: sqlx::postgres::PgRow| TapEventRecord {
-            event_time: row.get("event_time"),
-            user_id: row.get("user_id"),
-            tap_count: row.get("tap_count"),
-        })
-        .fetch_all(&mut *conn)
-        .await?;
+//         // Cek apakah sudah diklaim
+//         if player_task.claimed_at.is_some() {
+//             return Err(anyhow::anyhow!("Task already claimed"));
+//         }
 
-        Ok(records)
-    }
+//         // Klaim reward
+//         let reward = task.reward_score.unwrap_or(0);
+//         self.task_repo.claim_task_reward(user_id, task_id).await?;
 
-    pub async fn get_total_taps_last_24h(&self, user_id: i64) -> Result<i64> {
-        let mut conn = self.pool.acquire().await?;
-        
-        let result = sqlx::query(
-            "SELECT COALESCE(SUM(tap_count), 0) as total FROM tap_events WHERE user_id = $1 AND event_time >= NOW() - INTERVAL '24 hours'"
-        )
-        .bind(user_id)
-        .map(|row: sqlx::postgres::PgRow| row.get::<i64, _>("total"))
-        .fetch_one(&mut *conn)
-        .await?;
+//         // Tambahkan skor ke player
+//         self.add_score(user_id, reward, None).await?;
 
-        Ok(result)
-    }
+//         Ok(reward)
+//     }
 
-    pub async fn cleanup_old_events(&self, days_to_keep: i32) -> Result<u64> {
-        let mut conn = self.pool.acquire().await?;
-        
-        let result = sqlx::query(
-            "DELETE FROM tap_events WHERE event_time < NOW() - INTERVAL '1 day' * $1"
-        )
-        .bind(days_to_keep)
-        .execute(&mut *conn)
-        .await?;
+//     pub async fn get_player_tasks(&self, user_id: i64) -> Result<Vec<TaskResponse>> {
+//         let player_tasks = self.task_repo.get_player_tasks(user_id).await?;
+//         let mut task_responses = Vec::new();
 
-        Ok(result.rows_affected())
-    }
+//         for player_task in player_tasks {
+//             // Ambil task dari daily dulu
+//             let mut task_opt = self
+//                 .task_repo
+//                 .get_task("daily", player_task.task_id)
+//                 .await?;
 
-    pub async fn health_check(&self) -> Result<DatabaseHealth> {
-        let start = std::time::Instant::now();
-        
-        // Use fresh connection for health check
-        let mut conn = self.pool.acquire().await?;
-        let _: (i32,) = sqlx::query_as("SELECT 1 as health_check")
-            .fetch_one(&mut *conn)
-            .await?;
-            
-        let response_time = start.elapsed();
+//             // Kalau tidak ketemu, coba dari weekly
+//             if task_opt.is_none() {
+//                 task_opt = self
+//                     .task_repo
+//                     .get_task("weekly", player_task.task_id)
+//                     .await?;
+//             }
 
-        Ok(DatabaseHealth {
-            is_healthy: true,
-            response_time_ms: response_time.as_millis() as u64,
-            connection_pool_size: 20, // Static value since we can't get it from pool
-        })
-    }
+//             if let Some(task) = task_opt {
+//                 task_responses.push(TaskResponse {
+//                     task_id: task.task_id,
+//                     task_type: task.task_type,
+//                     title: task.title.unwrap_or_default(),
+//                     description: task.description,
+//                     completion_target: task.completion_target.unwrap_or(0),
+//                     reward_score: task.reward_score.unwrap_or(0),
+//                     progress: player_task.progress,
+//                     completed: player_task.completed_at.is_some(),
+//                     claimed: player_task.claimed_at.is_some(),
+//                 });
+//             }
+//         }
 
-    // Helper method to execute queries with retry logic for PgBouncer
-    async fn execute_with_retry<F, T>(&self, operation: F) -> Result<T>
-    where
-        F: Fn(&mut sqlx::PgConnection) -> futures::future::BoxFuture<'_, sqlx::Result<T>>,
-        T: Send + 'static,
-    {
-        const MAX_RETRIES: u32 = 3;
-        let mut last_error = None;
-        
-        for attempt in 1..=MAX_RETRIES {
-            let mut conn = match self.pool.acquire().await {
-                Ok(conn) => conn,
-                Err(e) => {
-                    last_error = Some(e.into());
-                    if attempt < MAX_RETRIES {
-                        let backoff = 100 * attempt;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff.into())).await;
+//         Ok(task_responses)
+//     }
 
-                        continue;
-                    }
-                    break;
-                }
-            };
-            
-            match operation(&mut *conn).await {
-                Ok(result) => return Ok(result),
-                Err(e) => {
-                    last_error = Some(e.into());
-                    if attempt < MAX_RETRIES {
-                        let backoff = 100 * attempt;
-                        tokio::time::sleep(tokio::time::Duration::from_millis(backoff.into())).await;
-                    }
-                }
-            }
-        }
-        
-        Err(last_error.unwrap_or_else(|| AppError::Internal(anyhow::anyhow!("All retry attempts failed"))))
-    }
-}
+//     // Shop operations
+//     pub async fn create_shop_item(&self, request: CreateShopItemRequest) -> Result<i32> {
+//         self.shop_repo.create_shop_item(request).await
+//     }
 
-#[derive(Debug)]
-pub struct PlayerRecord {
-    pub user_id: i64,
-    pub score: i64,
-    pub energy: i32,
-    pub last_seen: chrono::DateTime<chrono::Utc>,
-}
+//     pub async fn get_shop_items(&self, category: &str) -> Result<Vec<ShopItem>> {
+//         self.shop_repo.get_shop_items_by_category(category).await
+//     }
 
-#[derive(Debug)]
-pub struct TapEventRecord {
-    pub event_time: chrono::DateTime<chrono::Utc>,
-    pub user_id: i64,
-    pub tap_count: i32,
-}
+//     pub async fn purchase_item(&self, request: PurchaseItemRequest) -> Result<()> {
+//         let item = self
+//             .shop_repo
+//             .get_shop_item("", request.item_id)
+//             .await?
+//             .ok_or_else(|| anyhow::anyhow!("Item not found"))?;
 
-#[derive(Debug, serde::Serialize)]
-pub struct DatabaseHealth {
-    pub is_healthy: bool,
-    pub response_time_ms: u64,
-    pub connection_pool_size: u32,
-}
+//         let total_cost = item.price.unwrap_or(0) * request.quantity as i64;
+
+//         let player = self
+//             .get_player(request.user_id)
+//             .await?
+//             .ok_or_else(|| anyhow::anyhow!("Player not found"))?;
+
+//         // Panggilan pakai borrow
+//         self.shop_repo.purchase_item(&request).await?;
+
+//         self.add_score(request.user_id, -total_cost, None).await?;
+
+//         Ok(())
+//     }
+
+//     pub async fn get_player_items(&self, user_id: i64) -> Result<Vec<PlayerItem>> {
+//         self.shop_repo.get_player_items(user_id).await
+//     }
+
+//     pub async fn activate_item(&self, user_id: i64, item_id: i32) -> Result<()> {
+//         self.shop_repo.activate_item(user_id, item_id, true).await
+//     }
+
+//     // Referral operations
+//     pub async fn get_referrals(&self, referrer_id: i64) -> Result<Vec<Referral>> {
+//         self.referral_repo
+//             .get_referrals_by_referrer(referrer_id)
+//             .await
+//     }
+
+//     pub async fn get_referral_count(&self, referrer_id: i64) -> Result<i64> {
+//         self.referral_repo.count_referrals(referrer_id).await
+//     }
+
+//     // Leaderboard operations
+//     pub async fn get_leaderboard(&self, limit: i32) -> Result<Vec<LeaderboardResponse>> {
+//         self.leaderboard_repo.get_leaderboard(limit).await
+//     }
+
+//     pub async fn get_player_rank(&self, user_id: i64) -> Result<Option<i32>> {
+//         self.leaderboard_repo.get_player_rank(user_id).await
+//     }
+
+//     // Energy operations
+//     pub async fn recharge_energy(&self, user_id: i64) -> Result<i32> {
+//         // Implementation depends on energy recharge logic
+//         // This is a simplified version
+//         let player = self
+//             .get_player(user_id)
+//             .await?
+//             .ok_or_else(|| anyhow::anyhow!("Player not found"))?;
+
+//         let max_energy = player.max_energy.unwrap_or(1000);
+
+//         self.player_repo
+//             .update(UpdatePlayerRequest {
+//                 user_id,
+//                 username: None,
+//                 first_name: None,
+//                 level: None,
+//                 energy: Some(max_energy),
+//                 max_energy: None,
+//                 tap_value: None,
+//                 energy_recharge_rate: None,
+//             })
+//             .await?;
+
+//         Ok(max_energy)
+//     }
+
+//     pub async fn consume_energy(&self, user_id: i64, amount: i32) -> Result<i32> {
+//         let player = self
+//             .get_player(user_id)
+//             .await?
+//             .ok_or_else(|| anyhow::anyhow!("Player not found"))?;
+
+//         let current_energy = player.energy.unwrap_or(0);
+//         let new_energy = (current_energy - amount).max(0);
+
+//         self.player_repo
+//             .update(UpdatePlayerRequest {
+//                 user_id,
+//                 username: None,
+//                 first_name: None,
+//                 level: None,
+//                 energy: Some(new_energy),
+//                 max_energy: None,
+//                 tap_value: None,
+//                 energy_recharge_rate: None,
+//             })
+//             .await?;
+
+//         Ok(new_energy)
+//     }
+// }
